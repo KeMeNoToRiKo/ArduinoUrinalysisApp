@@ -25,7 +25,7 @@ struct LoginView: View {
     @State private var errorMessage: String? = nil
     @State private var isLoading = false
 
-    private let logic = LoginLogic()
+    private let logic = AuthLogic()
 
     var body: some View {
         NavigationStack {
@@ -175,7 +175,7 @@ struct LoginView: View {
             // Auth succeeded — flip the flag; ArduinoUrinalysisApp switches to ContentView
             loggedInUsername = user.username
             isLoggedIn = true
-        } catch let error as LoginError {
+        } catch let error as AuthError {
             errorMessage = error.errorDescription
         } catch {
             errorMessage = "An unexpected error occurred."

@@ -30,7 +30,7 @@ struct RegisterView: View {
     @State private var isLoading = false
     @State private var registrationSuccessful = false
 
-    private let logic = RegisterLogic()
+    private let logic = AuthLogic()
 
     var body: some View {
         NavigationStack {
@@ -202,7 +202,7 @@ struct RegisterView: View {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
                 dismiss()
             }
-        } catch let error as RegisterError {
+        } catch let error as AuthError {
             errorMessage = error.errorDescription
         } catch {
             errorMessage = "An unexpected error occurred."

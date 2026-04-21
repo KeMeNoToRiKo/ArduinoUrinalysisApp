@@ -41,7 +41,7 @@ struct ArduinoUrinalysisApp: App {
         }
         .environmentObject(bleManager)
         .environmentObject(sensorData)
-        //.modelContainer(for: [UserEntity.self, TestResultEntity.self])
+        .modelContainer(for: [UserEntity.self])
         // When BLE connects/disconnects, attach or detach the peripheral from SensorDataManager
         
         
