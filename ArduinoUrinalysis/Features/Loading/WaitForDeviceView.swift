@@ -10,6 +10,8 @@ import SwiftUI
 struct WaitingForDeviceView: View {
     /// Called once the device (or simulation) signals that the test has started.
     var onBegin: () -> Void
+    /// Called when the user taps Cancel — dismisses the entire flow.
+    var onCancel: () -> Void
 
     @EnvironmentObject var sensorData: SensorDataManager
     @EnvironmentObject var bleManager: BLEManager
@@ -19,7 +21,7 @@ struct WaitingForDeviceView: View {
     @State private var didScheduleSimStart = false
 
     var body: some View {
-        ZStack {
+        ZStack(alignment: .topLeading) {
             LinearGradient(
                 colors: [
                     Color(red: 0.22, green: 0.55, blue: 0.90),
@@ -91,6 +93,23 @@ struct WaitingForDeviceView: View {
                     .padding(.horizontal, 32)
                     .padding(.bottom, 48)
             }
+
+            // MARK: - Cancel button (top-left, above the gradient)
+            Button(action: onCancel) {
+                HStack(spacing: 5) {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 15, weight: .semibold))
+                    Text("Cancel")
+                        .font(.system(size: 15, weight: .medium))
+                }
+                .foregroundColor(.white)
+                .padding(.horizontal, 18)
+                .padding(.vertical, 10)
+                .background(Color.white.opacity(0.18))
+                .clipShape(Capsule())
+            }
+            .padding(.top, 15)
+            .padding(.leading, 18)
         }
         .onAppear {
             // Reset the flag so it fires fresh each test session
@@ -136,7 +155,7 @@ struct WaitingForDeviceView: View {
 }
 
 #Preview {
-    WaitingForDeviceView(onBegin: {})
+    WaitingForDeviceView(onBegin: {}, onCancel: {})
         .environmentObject(SensorDataManager())
         .environmentObject(BLEManager())
 }

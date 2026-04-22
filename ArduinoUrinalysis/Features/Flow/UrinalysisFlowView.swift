@@ -8,115 +8,129 @@
 import SwiftUI
 import SwiftData
 
-// MARK: - Flow state
+// MARK: - Flow steps
 
-private enum FlowStage {
-    case waiting       // WaitingForDeviceView — listening for test_started signal
-    case analyzing     // AnalyzingView        — real async classification pipeline
-    case done(TestResultEntity)  // Results screen (stub for now)
+private enum FlowStep {
+    case waiting       // WaitingForDeviceView — waiting for the physical button press
+    case analyzing     // AnalyzingView        — running the sensor pipeline
+    case results       // TestResultsView      — displaying the classified result
 }
 
 // MARK: - UrinalysisFlowView
 
-/// Owns the full test lifecycle in a single full-screen cover:
-///   WaitingForDeviceView  →  AnalyzingView  →  Results
+/// Owns the three-step urinalysis lifecycle:
+///   WaitingForDeviceView → AnalyzingView → TestResultsView
 ///
-/// `MainMenuView` presents this one view and never needs to manage
-/// sub-navigation itself.
+/// Persists the classified `TestResultEntity` to SwiftData once analysis
+/// is complete, then exposes `onBackToDashboard` so the caller (MainMenuView)
+/// can dismiss the full-screen cover.
 struct UrinalysisFlowView: View {
-    @Environment(\.dismiss) private var dismiss
+
+    @Environment(\.dismiss)      private var dismiss
     @Environment(\.modelContext) private var modelContext
+    @AppStorage("loggedInUsername") private var loggedInUsername: String = ""
 
     @EnvironmentObject var sensorData: SensorDataManager
     @EnvironmentObject var bleManager:  BLEManager
 
-    @AppStorage("loggedInUsername") private var loggedInUsername: String = ""
+    @State private var step: FlowStep = .waiting
 
-    @State private var stage: FlowStage = .waiting
+    /// Snapshot of the latest reading taken the moment analysis begins.
+    @State private var capturedReading: UrinalysisReading? = nil
+
+    /// The persisted entity — set after classify() + SwiftData insert.
+    @State private var savedResult: TestResultEntity? = nil
+
+    // MARK: - Body
 
     var body: some View {
         ZStack {
-            switch stage {
+            switch step {
 
-            // ── 1. Wait for the device button press (or sim signal) ──────────
             case .waiting:
-                WaitingForDeviceView {
-                    // Capture the freshest reading the moment the signal arrives.
-                    // For simulated mode this is already populated by the timer;
-                    // for live BLE it's the last packet received before button press.
-                    let snapshot = sensorData.latestReading
-                    withAnimation(.easeInOut(duration: 0.35)) {
-                        stage = .analyzing
+                WaitingForDeviceView(
+                    onBegin: {
+                        // Capture the reading now — before the analyzing screen shows —
+                        // so we use the most recent live / simulated data point.
+                        capturedReading = sensorData.latestReading
+                        withAnimation(.easeInOut(duration: 0.3)) {
+                            step = .analyzing
+                        }
+                    },
+                    onCancel: {
+                        dismiss()
                     }
-                    // Store the snapshot so AnalyzingView uses the exact same data
-                    // even if the sensor keeps sending updates in the background.
-                    capturedReadingForAnalysis = snapshot
-                }
+                )
                 .transition(.opacity)
 
-            // ── 2. Run the real async classification pipeline ─────────────────
             case .analyzing:
-                AnalyzingView(capturedReading: capturedReadingForAnalysis) { reading, status, confidence, recommendation in
-                    // Build + persist the entity
-                    let entity = buildEntity(
+                AnalyzingView(capturedReading: capturedReading) { reading, status, confidence, recommendation in
+                    // Persist to SwiftData on the main thread (modelContext is main-actor bound)
+                    let entity = persistResult(
                         reading:        reading,
                         status:         status,
                         confidence:     confidence,
                         recommendation: recommendation
                     )
-                    if let entity {
-                        modelContext.insert(entity)
-                        try? modelContext.save()
-                        withAnimation(.easeInOut(duration: 0.35)) {
-                            stage = .done(entity)
-                        }
-                    } else {
-                        // No logged-in user found — bail out gracefully
-                        dismiss()
+                    savedResult = entity
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        step = .results
                     }
                 }
                 .transition(.opacity)
 
-            // ── 3. Results ────────────────────────────────────────────────────
-            case .done(let entity):
-                // TODO: Replace this stub with your real ResultsView(entity:)
-                ResultsStubView(entity: entity) {
-                    sensorData.resetTestStarted()
-                    dismiss()
+            case .results:
+                if let result = savedResult {
+                    TestResultsView(result: result) {
+                        dismiss()
+                    }
+                    .transition(.opacity)
+                } else {
+                    // Should never happen — safety fallback
+                    Color(.systemGroupedBackground)
+                        .overlay(
+                            VStack(spacing: 16) {
+                                Image(systemName: "exclamationmark.triangle.fill")
+                                    .font(.system(size: 40))
+                                    .foregroundColor(.orange)
+                                Text("Result unavailable")
+                                    .font(.headline)
+                                Button("Back") { dismiss() }
+                                    .buttonStyle(.borderedProminent)
+                            }
+                        )
+                        .transition(.opacity)
                 }
-                .transition(.opacity)
             }
         }
-        .animation(.easeInOut(duration: 0.35), value: stageID)
+        .animation(.easeInOut(duration: 0.3), value: step)
     }
 
-    // MARK: - Helpers
+    // MARK: - Persistence
 
-    /// Holds the reading snapshot captured the moment test_started fires.
-    @State private var capturedReadingForAnalysis: UrinalysisReading? = nil
-
-    /// An Equatable proxy for `FlowStage` — needed to drive `.animation(value:)`.
-    private var stageID: Int {
-        switch stage {
-        case .waiting:    return 0
-        case .analyzing:  return 1
-        case .done:       return 2
-        }
-    }
-
-    private func buildEntity(
+    /// Builds a `TestResultEntity` from the classified data, inserts it into
+    /// SwiftData, and returns it. Falls back gracefully if the logged-in user
+    /// cannot be found in the store (uses an ephemeral placeholder instead).
+    @discardableResult
+    private func persistResult(
         reading:        UrinalysisReading,
         status:         String,
         confidence:     Double,
         recommendation: String
-    ) -> TestResultEntity? {
-        // Look up the current user so we can bind the result to them.
-        let descriptor = FetchDescriptor<UserEntity>()
-        guard let users = try? modelContext.fetch(descriptor),
-              let user  = users.first(where: { $0.username == loggedInUsername })
-        else { return nil }
+    ) -> TestResultEntity {
 
-        return TestResultEntity(
+        // Resolve the logged-in user so we can stamp the result with their UUID.
+        let user: UserEntity = UserStore.findUser(
+            byUsername: loggedInUsername,
+            in: modelContext
+        ) ?? UserEntity(
+            email:        "unknown@local",
+            username:     loggedInUsername.isEmpty ? "unknown" : loggedInUsername,
+            passwordHash: ""
+        )
+
+        let entity = TestResultEntity(
+            timestamp:           reading.timestamp,
             userID:              user.id,
             username:            user.username,
             isSimulated:         sensorData.simulatedMode,
@@ -136,93 +150,11 @@ struct UrinalysisFlowView: View {
             recommendation:      recommendation,
             deviceName:          reading.device
         )
-    }
-}
 
-// MARK: - Results stub
-// Replace this with your real results screen when it is ready.
+        modelContext.insert(entity)
+        try? modelContext.save()
 
-private struct ResultsStubView: View {
-    let entity: TestResultEntity
-    let onDismiss: () -> Void
-
-    var body: some View {
-        ZStack {
-            LinearGradient(
-                colors: [Color(red: 0.08, green: 0.52, blue: 0.25), Color(red: 0.10, green: 0.68, blue: 0.40)],
-                startPoint: .top, endPoint: .bottom
-            )
-            .ignoresSafeArea()
-
-            VStack(spacing: 24) {
-                Spacer()
-
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.system(size: 72))
-                    .foregroundColor(.white)
-
-                VStack(spacing: 8) {
-                    Text("Analysis Complete")
-                        .font(.system(size: 28, weight: .bold))
-                        .foregroundColor(.white)
-
-                    if entity.isSimulated {
-                        Label("Simulated test", systemImage: "waveform")
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundColor(.white.opacity(0.75))
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 5)
-                            .background(Color.white.opacity(0.18))
-                            .clipShape(Capsule())
-                    }
-                }
-
-                VStack(spacing: 10) {
-                    resultRow(label: "Status",     value: entity.overallStatus)
-                    resultRow(label: "Hydration",  value: "\(Int(entity.hydrationPercent))%")
-                    resultRow(label: "pH",         value: String(format: "%.2f", entity.pH))
-                    resultRow(label: "Confidence", value: String(format: "%.0f%%", entity.algorithmConfidence))
-                }
-                .padding(20)
-                .background(Color.white.opacity(0.15))
-                .clipShape(RoundedRectangle(cornerRadius: 18))
-                .padding(.horizontal, 32)
-
-                Text(entity.recommendation)
-                    .font(.system(size: 14))
-                    .foregroundColor(.white.opacity(0.9))
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 32)
-
-                Spacer()
-
-                Button(action: onDismiss) {
-                    Text("Done")
-                        .font(.system(size: 16, weight: .bold))
-                        .foregroundColor(Color(red: 0.08, green: 0.52, blue: 0.25))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 16)
-                        .background(Color.white)
-                        .clipShape(RoundedRectangle(cornerRadius: 16))
-                        .shadow(color: .black.opacity(0.12), radius: 8, x: 0, y: 4)
-                }
-                .buttonStyle(ScaleButtonStyle())
-                .padding(.horizontal, 32)
-                .padding(.bottom, 48)
-            }
-        }
-    }
-
-    private func resultRow(label: String, value: String) -> some View {
-        HStack {
-            Text(label)
-                .font(.system(size: 14, weight: .medium))
-                .foregroundColor(.white.opacity(0.75))
-            Spacer()
-            Text(value)
-                .font(.system(size: 15, weight: .bold))
-                .foregroundColor(.white)
-        }
+        return entity
     }
 }
 

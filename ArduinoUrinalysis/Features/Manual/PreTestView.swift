@@ -36,14 +36,12 @@ struct PreTestView: View {
 
                             Spacer()
                             
-                            // Spacer pushes the button below the fold —
-                            // user must scroll down to reach it.
-                            //Spacer(minLength: geo.size.height * 0.28)
-
                             beginButton
 
                             Color.clear.frame(height: 36)
                         }
+                        .frame(maxWidth: 640)
+                        .frame(maxWidth: .infinity)
                         .padding(.horizontal, 18)
                         .padding(.top, 18)
                         .padding(.bottom, 8)
@@ -143,6 +141,7 @@ struct PreTestView: View {
             .padding(.top, 6)
             .padding(.bottom, step.id < UrinalysisProtocolStep.all.count ? 8 : 0)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 16)
         .padding(.top, 14)
         .padding(.bottom, step.id < UrinalysisProtocolStep.all.count ? 0 : 16)
