@@ -5,12 +5,6 @@
 //  Created by Xavier Michael Emmanuel Novio Ombrog on 2/22/26.
 //
 
-
-//
-//  LoginView.swift
-//  ArduinoUrinalysis
-//
-
 import SwiftUI
 import SwiftData
 

@@ -5,11 +5,6 @@
 //  Created by Xavier Michael Emmanuel Novio Ombrog on 2/12/26.
 //
 
-//
-//  ArduinoUrinalysisApp.swift
-//  ArduinoUrinalysis
-//
-
 import SwiftUI
 import SwiftData
 
@@ -24,7 +19,6 @@ struct ArduinoUrinalysisApp: App {
 
     var body: some Scene {
         WindowGroup {
-            
             if !splashFinished {
                 SplashView(isFinished: $splashFinished)
                     .transition(.opacity)
@@ -41,10 +35,9 @@ struct ArduinoUrinalysisApp: App {
         }
         .environmentObject(bleManager)
         .environmentObject(sensorData)
-        .modelContainer(for: [UserEntity.self])
-        // When BLE connects/disconnects, attach or detach the peripheral from SensorDataManager
-        
-        
+        // Both UserEntity and TestResultEntity are registered so SwiftData
+        // can persist test results and link them back to the logged-in user.
+        .modelContainer(for: [UserEntity.self, TestResultEntity.self])
         .onChange(of: bleManager.connectionState) { _, newState in
             switch newState {
             case .connected:
@@ -55,11 +48,7 @@ struct ArduinoUrinalysisApp: App {
                 sensorData.detachPeripheral()
             default:
                 break
-         
             }
-             
-         
         }
-         
     }
 }

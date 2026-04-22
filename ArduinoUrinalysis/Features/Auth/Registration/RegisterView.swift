@@ -5,14 +5,6 @@
 //  Created by Xavier Michael Emmanuel Novio Ombrog on 2/22/26.
 //
 
-//
-//  RegisterView.swift
-//  ArduinoUrinalysis
-//
-//
-//  RegisterView.swift
-//  ArduinoUrinalysis
-//
 
 import SwiftUI
 import SwiftData

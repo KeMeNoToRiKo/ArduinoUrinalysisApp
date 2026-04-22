@@ -10,15 +10,16 @@ import SwiftUI
 struct MainMenuView: View {
     @AppStorage("isLoggedIn") private var isLoggedIn: Bool = false
     @AppStorage("loggedInUsername") private var loggedInUsername: String = ""
+    @AppStorage("manualDoNotShowAgain") private var manualDoNotShowAgain: Bool = false
     @EnvironmentObject var bleManager: BLEManager
     @EnvironmentObject var sensorData: SensorDataManager
 
     @State private var showConnectDevice = false
-    @State private var showUrinalysisFlow = false
+    @State private var showPreTest = false          // pre-test checklist (shown first unless opted out)
+    @State private var showUrinalysisFlow = false   // UrinalysisFlowView — waiting → analyzing → results
+    @State private var showManual = false
     @State private var headerAppeared = false
     @State private var contentAppeared = false
-
-    // BLE banner press state
     @State private var bleBannerPressed = false
 
     private var lastHydration: String { sensorData.latestReading?.hydrationDisplay ?? "--" }
@@ -60,12 +61,33 @@ struct MainMenuView: View {
         }
         .background(Color(.systemGroupedBackground))
         .ignoresSafeArea(edges: .top)
+
+        // ── Sheets / covers ──────────────────────────────────────────────────
+
+        // Bluetooth device picker
         .sheet(isPresented: $showConnectDevice) {
-            // ConnectDeviceView()
+            ConnectDeviceView()
         }
+
+        // Pre-test protocol checklist (shown unless the user opted out).
+        // onProceed dismisses the checklist and opens the flow.
+        .fullScreenCover(isPresented: $showPreTest) {
+            PreTestView(onProceed: {
+                showUrinalysisFlow = true
+            })
+        }
+
+        // The full test lifecycle: waiting → analyzing → results.
+        // This is the ONLY entry point into the urinalysis pipeline.
         .fullScreenCover(isPresented: $showUrinalysisFlow) {
-            // UrinalysisFlowView()
+            UrinalysisFlowView()
         }
+
+        // Read-only manual opened from the profile menu
+        .fullScreenCover(isPresented: $showManual) {
+            ManualView()
+        }
+
         .onAppear {
             if sensorData.simulatedMode { sensorData.startSimulation() }
             withAnimation(.easeOut(duration: 0.45)) { headerAppeared = true }
@@ -113,7 +135,7 @@ struct MainMenuView: View {
                     Spacer()
 
                     HStack(spacing: 10) {
-                        CircleHeaderButton(icon: "person.fill") {}
+                        profileMenuButton
 
                         CircleHeaderButton(icon: "rectangle.portrait.and.arrow.right") {
                             bleManager.disconnect()
@@ -131,71 +153,155 @@ struct MainMenuView: View {
         .frame(height: 170)
     }
 
+    // MARK: - Profile Menu Button
+
+    private var profileMenuButton: some View {
+        Menu {
+            Button {
+                showManual = true
+            } label: {
+                Label("View Manual", systemImage: "list.clipboard.fill")
+            }
+
+            Divider()
+
+            Button(role: .destructive) {
+                bleManager.disconnect()
+                loggedInUsername = ""
+                isLoggedIn = false
+            } label: {
+                Label("Log Out", systemImage: "rectangle.portrait.and.arrow.right")
+            }
+        } label: {
+            Image(systemName: "person.fill")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundColor(.white)
+                .frame(width: 40, height: 40)
+                .background(Color.white.opacity(0.18))
+                .clipShape(Circle())
+        }
+    }
+
     // MARK: - BLE Status Banner
 
     @ViewBuilder
     private var bleStatusBanner: some View {
+        if bleManager.isConnected {
+            connectedBLEBanner
+        } else {
+            disconnectedBLEBanner
+        }
+    }
+
+    private var connectedBLEBanner: some View {
         HStack(spacing: 14) {
             ZStack {
                 Circle()
-                    .fill(bleManager.isConnected ? Color.green.opacity(0.15) : Color(.systemGray5))
+                    .fill(Color.white.opacity(0.18))
                     .frame(width: 42, height: 42)
-                Image(systemName: bleManager.isConnected
-                      ? "antenna.radiowaves.left.and.right"
-                      : "antenna.radiowaves.left.and.right.slash")
+                Image(systemName: "antenna.radiowaves.left.and.right")
                     .font(.system(size: 17, weight: .semibold))
-                    .foregroundColor(bleManager.isConnected ? .green : Color(.systemGray))
+                    .foregroundColor(.white)
+            }
+
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 5) {
+                    Circle()
+                        .fill(Color(red: 0.45, green: 1.0, blue: 0.60))
+                        .frame(width: 6, height: 6)
+                    Text("Connected")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(.white)
+                        .lineLimit(1)
+                }
+                Text(bleManager.connectedName ?? "Arduino Device")
+                    .font(.system(size: 12))
+                    .foregroundColor(.white.opacity(0.80))
+            }
+
+            Spacer()
+
+            Button {
+                bleManager.disconnect()
+            } label: {
+                Text("Disconnect")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.90))
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(Color.white.opacity(0.18))
+                    .clipShape(Capsule())
+                    .overlay(Capsule().stroke(Color.white.opacity(0.25), lineWidth: 1))
+            }
+            .buttonStyle(ScaleButtonStyle())
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .background(
+            LinearGradient(
+                colors: [
+                    Color(red: 0.08, green: 0.52, blue: 0.25),
+                    Color(red: 0.10, green: 0.68, blue: 0.40)
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .shadow(color: Color(red: 0.08, green: 0.52, blue: 0.25).opacity(0.35), radius: 10, x: 0, y: 4)
+        .transition(.asymmetric(
+            insertion: .scale(scale: 0.96).combined(with: .opacity),
+            removal:   .scale(scale: 0.96).combined(with: .opacity)
+        ))
+    }
+
+    private var disconnectedBLEBanner: some View {
+        HStack(spacing: 14) {
+            ZStack {
+                Circle()
+                    .fill(Color(.systemGray5))
+                    .frame(width: 42, height: 42)
+                Image(systemName: "antenna.radiowaves.left.and.right.slash")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundColor(Color(.systemGray))
                     .scaleEffect(bleBannerPressed ? 0.80 : 1.0)
                     .animation(.spring(response: 0.3, dampingFraction: 0.5), value: bleBannerPressed)
             }
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(bleManager.isConnected
-                     ? "Connected · \(bleManager.connectedName ?? "Arduino Device")"
-                     : "No device connected")
+                Text("No device connected")
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundColor(Color(.label))
-                Text(bleManager.isConnected ? "Device ready for testing" : "Tap to pair your Arduino sensor")
+                Text("Tap to pair your Arduino sensor")
                     .font(.system(size: 12))
                     .foregroundColor(Color(.secondaryLabel))
             }
 
             Spacer()
 
-            if bleManager.isConnected {
-                Button {
-                    bleManager.disconnect()
-                } label: {
-                    Text("Disconnect")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(.red)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(Color.red.opacity(0.1))
-                        .clipShape(Capsule())
-                }
-                .buttonStyle(ScaleButtonStyle())
-            } else {
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundColor(Color(.tertiaryLabel))
-                    .offset(x: bleBannerPressed ? 3 : 0)
-                    .animation(.spring(response: 0.3, dampingFraction: 0.4), value: bleBannerPressed)
-            }
+            Image(systemName: "chevron.right")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundColor(Color(.tertiaryLabel))
+                .offset(x: bleBannerPressed ? 3 : 0)
+                .animation(.spring(response: 0.3, dampingFraction: 0.4), value: bleBannerPressed)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 14)
         .background(Color(.systemBackground))
         .clipShape(RoundedRectangle(cornerRadius: 16))
-        .shadow(color: .black.opacity(bleBannerPressed ? 0.02 : 0.06), radius: bleBannerPressed ? 3 : 8, x: 0, y: bleBannerPressed ? 1 : 2)
+        .shadow(color: .black.opacity(bleBannerPressed ? 0.02 : 0.06),
+                radius: bleBannerPressed ? 3 : 8, x: 0, y: bleBannerPressed ? 1 : 2)
         .scaleEffect(bleBannerPressed ? 0.975 : 1.0)
         .animation(.spring(response: 0.25, dampingFraction: 0.65), value: bleBannerPressed)
         .onLongPressGesture(minimumDuration: 0.0, pressing: { pressing in
             bleBannerPressed = pressing
         }, perform: {
-            if !bleManager.isConnected { showConnectDevice = true }
+            showConnectDevice = true
         })
-        .animation(.easeInOut(duration: 0.25), value: bleManager.isConnected)
+        .transition(.asymmetric(
+            insertion: .scale(scale: 0.96).combined(with: .opacity),
+            removal:   .scale(scale: 0.96).combined(with: .opacity)
+        ))
     }
 
     // MARK: - Sim Toggle Row
@@ -275,7 +381,14 @@ struct MainMenuView: View {
 
     private var primaryActionCard: some View {
         Button {
-            showUrinalysisFlow = true
+            if manualDoNotShowAgain {
+                // Skip the checklist — go straight to the flow
+                showUrinalysisFlow = true
+            } else {
+                // Show the pre-test checklist first;
+                // its onProceed callback opens showUrinalysisFlow
+                showPreTest = true
+            }
         } label: {
             HStack(spacing: 20) {
                 ZStack {
@@ -361,7 +474,6 @@ struct MainMenuView: View {
 
 // MARK: - Subcomponents
 
-/// Header icon button with spring scale + glow flash on press
 private struct CircleHeaderButton: View {
     let icon: String
     let action: () -> Void
@@ -386,7 +498,6 @@ private struct CircleHeaderButton: View {
     }
 }
 
-/// Metric card — taps with a scale bounce
 struct MetricCard: View {
     let icon: String
     let iconColor: Color
@@ -435,7 +546,6 @@ struct MetricCard: View {
     }
 }
 
-/// Secondary action card — arrow slides right + card lifts on press
 private struct SecondaryActionCard: View {
     let icon: String
     let iconColor: Color
@@ -483,7 +593,6 @@ private struct SecondaryActionCard: View {
 
 // MARK: - Button Styles
 
-/// Default: scale down on press with a spring snap back
 struct ScaleButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
@@ -496,17 +605,12 @@ struct ScaleButtonStyle: ButtonStyle {
     }
 }
 
-/// Secondary card: scale + slides the trailing arrow rightward on press
 private struct ArrowSlideButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            // Shift the arrow right by targeting the last trailing icon via overlay trick —
-            // instead we animate the whole label and rely on the content's own arrow offset
             .scaleEffect(configuration.isPressed ? 0.975 : 1.0)
             .brightness(configuration.isPressed ? -0.02 : 0)
             .animation(.spring(response: 0.22, dampingFraction: 0.6), value: configuration.isPressed)
-            // Overlay: nudge the chevron region by compositing a subtle right-shifted duplicate —
-            // simpler: we just use the scale + a horizontal offset on the card
             .offset(x: configuration.isPressed ? 1 : 0)
     }
 }

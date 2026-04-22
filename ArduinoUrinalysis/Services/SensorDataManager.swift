@@ -17,9 +17,12 @@ final class SensorDataManager: NSObject, ObservableObject {
     @Published var isReceivingData: Bool = false
     @Published var simulatedMode: Bool = true
     @Published var statusMessage: String = "No data yet"
-    /// Bumped on every successfully parsed BLE packet.
-    /// UrinalysisFlowView watches this instead of latestReading?.timestamp
-    /// so it always fires, even if sensor values are unchanged.
+
+    /// Set to `true` when the Arduino (or simulation) signals that a test has started.
+    /// WaitingForDeviceView watches this to advance the flow.
+    @Published var testStarted: Bool = false
+
+    /// Bumped on every successfully parsed BLE sensor-data packet.
     @Published var lastBLEPacketDate: Date? = nil
 
     // The Arduino sends all sensor data as a single JSON blob on one characteristic.
@@ -53,6 +56,22 @@ final class SensorDataManager: NSObject, ObservableObject {
         statusMessage = "Simulation stopped"
     }
 
+    /// Called by WaitingForDeviceView in sim mode.
+    /// Simulates the Arduino pressing the physical button and emitting a "test_started" packet.
+    func simulateTestStart(after delay: TimeInterval = 2.5) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self else { return }
+            self.testStarted = true
+            self.statusMessage = "Test started (simulated)"
+        }
+    }
+
+    /// Resets the testStarted flag — call this when returning to the main menu
+    /// so the next test cycle works correctly.
+    func resetTestStarted() {
+        testStarted = false
+    }
+
     private func emitSimulated() {
         DispatchQueue.main.async {
             self.latestReading = UrinalysisReading.simulated()
@@ -82,6 +101,19 @@ final class SensorDataManager: NSObject, ObservableObject {
     // MARK: - JSON parsing
 
     private func parseAndEmit(_ data: Data) {
+        // First, check if this is a control packet (e.g. test_started) rather than sensor data.
+        if let controlPayload = try? JSONDecoder().decode(ControlPayload.self, from: data) {
+            if controlPayload.type == "test_started" {
+                DispatchQueue.main.async {
+                    self.testStarted = true
+                    self.statusMessage = "Test started — \(controlPayload.device)"
+                }
+                print("[Sensor] Received test_started signal from \(controlPayload.device)")
+                return
+            }
+        }
+
+        // Otherwise try to decode it as a full sensor reading.
         if let reading = UrinalysisReading.from(data: data) {
             DispatchQueue.main.async {
                 self.latestReading = reading
@@ -94,6 +126,13 @@ final class SensorDataManager: NSObject, ObservableObject {
             print("[Sensor] JSON parse failed. Raw: \(raw)")
         }
     }
+}
+
+// MARK: - Minimal control-packet model
+// The Arduino sends { "device": "...", "type": "test_started" } when the button is pressed.
+private struct ControlPayload: Decodable {
+    let device: String
+    let type: String
 }
 
 // MARK: - CBPeripheralDelegate
@@ -139,7 +178,6 @@ extension SensorDataManager: CBPeripheralDelegate {
 
         if let raw = String(data: receiveBuffer, encoding: .utf8), raw.contains("}") {
             if let jsonData = extractJSON(from: receiveBuffer) {
-                // Once we see data coming through, lock in this UUID as the data characteristic
                 print("[Sensor] Valid JSON received on \(characteristic.uuid) — use this UUID in dataCharacteristicUUID")
                 parseAndEmit(jsonData)
             }
